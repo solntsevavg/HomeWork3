@@ -2,104 +2,135 @@
 using Autodesk.Revit.DB;
 using Autodesk.Revit.DB.Mechanical;
 using Autodesk.Revit.UI;
+using Autodesk.Revit.UI.Selection;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Media.Imaging;
+using static System.Net.Mime.MediaTypeNames;
 
 namespace Intro
 {
-    //КОММЕНТАРИИ. Сделала задачу не для стен, а для воздхуоводов. Родные мне они)
+
     [Transaction(TransactionMode.Manual)]
-    public class DuctStatisticsCommand : IExternalCommand
+    public class SelectionStatisticsCommand : IExternalCommand
     {
-        public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
+
+        public class DuctSystemsSelectionFilter : ISelectionFilter
         {
-            UIDocument uiDoc = commandData.Application.ActiveUIDocument;
-            Document doc = uiDoc.Document;
+            private readonly List<BuiltInCategory> allowedCategories = new List<BuiltInCategory>
+    {
+                BuiltInCategory.OST_DuctAccessory,         // Арматура воздуховодов
+        BuiltInCategory.OST_DuctTerminal,         // Воздухораспределители
+        BuiltInCategory.OST_MechanicalEquipment   // Оборудование
+    };
 
-            // Получаем все воздуховоды
-            FilteredElementCollector collector = new FilteredElementCollector(doc);
-            IList<Element> ductElements = collector
-                .OfCategory(BuiltInCategory.OST_DuctCurves)
-                .WhereElementIsNotElementType()
-                .ToElements();
-
-            // Обработка случая, когда воздуховодов нет
-            if (ductElements.Count == 0)
+            public bool AllowElement(Element elem)
             {
-                TaskDialog.Show("Статистика воздуховодов", "В проекте не найдено воздуховодов.");
-                return Result.Succeeded;
+                // Проверяем, что элемент - FamilyInstance и принадлежит разрешенной категории
+                if (elem is FamilyInstance familyInstance)
+                {
+                    return allowedCategories.Contains((BuiltInCategory)familyInstance.Category.Id.IntegerValue);
+                }
+                return false;
             }
 
+            public bool AllowReference(Reference reference, XYZ position)
+            {
+                return false;
+            }
+        }
+        public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
+        {
+            UIApplication uiApp = commandData.Application;
+            UIDocument uiDoc = uiApp.ActiveUIDocument;
+            Document doc = uiDoc.Document;
 
-            List<Duct> ducts = new List<Duct>(); //Список всех воздуховодов
-            List<double> ductLengths = new List<double>(); //Список всех длин воздуховодов
+            try
+            {
+                // Запрашиваем выбор элементов у пользователя
+                IList<Reference> selectedReferences = uiDoc.Selection.PickObjects(
+                    ObjectType.Element,
+                    new DuctSystemsSelectionFilter(),
+                    "Выберите элементы систем вентиляции");
 
-           
-                foreach (Element element in ductElements)
+                // Собираем элементы из ссылок
+                List<Element> selectedElements = new List<Element>();
+                foreach (Reference reference in selectedReferences)
                 {
-                    Duct duct = element as Duct;
-                    if (duct != null)
+                    Element element = doc.GetElement(reference);
+                    if (element != null)
                     {
-                        Parameter lengthParam = duct.get_Parameter(BuiltInParameter.CURVE_ELEM_LENGTH); //Длина
-                        if (lengthParam != null && lengthParam.HasValue)
+                        selectedElements.Add(element);
+                    }
+                }
+
+                // Создаем Dictionary для подсчета по категориям
+                Dictionary<string, int> categoryCount = new Dictionary<string, int>();
+
+                // Подсчитываем общее количество и распределение по категориям
+                int totalCount = selectedElements.Count;
+
+                foreach (Element element in selectedElements)
+                {
+                    Category category = element.Category;
+                    if (category != null)
+                    {
+                        string categoryName = category.Name;
+
+                        if (categoryCount.ContainsKey(categoryName))
                         {
-                            double length = lengthParam.AsDouble();
-                            ductLengths.Add(length);
-                            ducts.Add(duct);
+                            categoryCount[categoryName]++;
+                        }
+                        else
+                        {
+                            categoryCount.Add(categoryName, 1);
                         }
                     }
                 }
-           // Расчет статистики
-            int totalDucts = ducts.Count;
-            double maxLength = ductLengths.Max();
-            double minLength = ductLengths.Min();
-            double avgLength = ductLengths.Average();
 
-            // Поиск самого длинного и самого короткого воздуховода
-            Duct longestDuct = ducts[ductLengths.IndexOf(maxLength)];
-            Duct shortestDuct = ducts[ductLengths.IndexOf(minLength)];
-            // Транзакция только для изменения параметров
-            using (Transaction t = new Transaction(doc, "Установка комментариев для воздуховодов"))
-            {
-                t.Start();
-
-                // Установка комментариев
-                Parameter longCommentParam = longestDuct.LookupParameter("Комментарии");
-                if (longCommentParam != null && !longCommentParam.IsReadOnly)
+                // Формируем отчет
+                string report = $"СТАТИСТИКА ВЫБРАННЫХ ЭЛЕМЕНТОВ\n\n";
+                report += $"Общее количество элементов: {totalCount}\n\n";
+                report += "Распределение по категориям:\n";
+                foreach (var category in categoryCount.OrderByDescending(x => x.Value))
                 {
-                    longCommentParam.Set("Самый длинный воздуховод");
+                    report += $"  {category.Key} → {category.Value} элементов\n";
                 }
 
-                Parameter shortCommentParam = shortestDuct.LookupParameter("Комментарии");
-                if (shortCommentParam != null && !shortCommentParam.IsReadOnly)
+                // Дополнительная информация о типах элементов
+                report += $"\nТипы выбранных элементов:\n";
+                var elementTypes = selectedElements
+                    .Select(e => e.GetType().Name)
+                    .Distinct()
+                    .ToList();
+
+                foreach (string typeName in elementTypes)
                 {
-                    shortCommentParam.Set("Самый короткий воздуховод");
+                    int typeCount = selectedElements.Count(e => e.GetType().Name == typeName);
+                    report += $"  {typeName}: {typeCount} элементов\n";
                 }
 
-                t.Commit();
+                // Выводим отчет в TaskDialog
+                TaskDialog.Show("Статистика выбора", report);
+
+                return Result.Succeeded;
             }
-            // Форматирование отчета (конвертация из футов в миллиметры)
-            string report = $"Статистика воздуховодов:\n\n" +
-                           $"Общее количество: {totalDucts}\n" +
-                           $"Самая большая длина: {maxLength * 304.8:F2} мм\n" +
-                           $"Самая маленькая длина: {minLength * 304.8:F2} мм\n" +
-                           $"Средняя длина: {avgLength * 304.8:F2} мм\n\n" +
-                           $"Параметры обновлены для:\n" +
-                           $"• Самый длинный воздуховод (ID: {longestDuct.Id})\n" +
-                           $"• Самый короткий воздуховод (ID: {shortestDuct.Id})";
-
-            
-            // Вывод отчета в TaskDialog:cite[10]
-            TaskDialog.Show("Отчет по воздуховодам", report);
-            return Result.Succeeded;
-        }
-           public Result OnShutdown(UIControlledApplication application)
-        {
-            return Result.Succeeded;
+            catch (Autodesk.Revit.Exceptions.OperationCanceledException)
+            {
+                // Пользователь нажал Esc или отменил выбор
+                TaskDialog.Show("Статистика выбора", "Выбор отменен пользователем.");
+                return Result.Cancelled;
+            }
+            catch (Exception ex)
+            {
+                message = $"Ошибка при выполнении команды: {ex.Message}";
+                return Result.Failed;
+            }
         }
     }
 }
+
+
