@@ -1,6 +1,7 @@
 ﻿using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.DB.Mechanical;
+using Autodesk.Revit.DB.Plumbing;
 using Autodesk.Revit.UI;
 using Autodesk.Revit.UI.Selection;
 using System;
@@ -13,35 +14,9 @@ using static System.Net.Mime.MediaTypeNames;
 
 namespace Intro
 {
-
     [Transaction(TransactionMode.Manual)]
-    public class SelectionStatisticsCommand : IExternalCommand
+    public class PipeDistanceCommand : IExternalCommand
     {
-
-        public class DuctSystemsSelectionFilter : ISelectionFilter
-        {
-            private readonly List<BuiltInCategory> allowedCategories = new List<BuiltInCategory>
-    {
-                BuiltInCategory.OST_DuctAccessory,         // Арматура воздуховодов
-        BuiltInCategory.OST_DuctTerminal,         // Воздухораспределители
-        BuiltInCategory.OST_MechanicalEquipment   // Оборудование
-    };
-
-            public bool AllowElement(Element elem)
-            {
-                // Проверяем, что элемент - FamilyInstance и принадлежит разрешенной категории
-                if (elem is FamilyInstance familyInstance)
-                {
-                    return allowedCategories.Contains((BuiltInCategory)familyInstance.Category.Id.IntegerValue);
-                }
-                return false;
-            }
-
-            public bool AllowReference(Reference reference, XYZ position)
-            {
-                return false;
-            }
-        }
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
             UIApplication uiApp = commandData.Application;
@@ -50,74 +25,65 @@ namespace Intro
 
             try
             {
-                // Запрашиваем выбор элементов у пользователя
+                // Запрашиваем выбор двух труб
                 IList<Reference> selectedReferences = uiDoc.Selection.PickObjects(
                     ObjectType.Element,
-                    new DuctSystemsSelectionFilter(),
-                    "Выберите элементы систем вентиляции");
+                    new PipeSelectionFilter(),
+                    "Выберите две трубы для расчета расстояния между ними");
 
-                // Собираем элементы из ссылок
-                List<Element> selectedElements = new List<Element>();
-                foreach (Reference reference in selectedReferences)
+                // Проверка выбора - убедиться, что выбраны именно две трубы
+                if (selectedReferences.Count != 2)
                 {
-                    Element element = doc.GetElement(reference);
-                    if (element != null)
-                    {
-                        selectedElements.Add(element);
-                    }
+                    TaskDialog.Show("Ошибка", "Пожалуйста, выберите две трубы.");
+                    return Result.Cancelled;
                 }
 
-                // Создаем Dictionary для подсчета по категориям
-                Dictionary<string, int> categoryCount = new Dictionary<string, int>();
+                // Получение труб из ссылок
+                var pipe1 = doc.GetElement(selectedReferences[0]) as Pipe;
+                var pipe2 = doc.GetElement(selectedReferences[1]) as Pipe;
 
-                // Подсчитываем общее количество и распределение по категориям
-                int totalCount = selectedElements.Count;
-
-                foreach (Element element in selectedElements)
+                if (pipe1 == null || pipe2 == null)
                 {
-                    Category category = element.Category;
-                    if (category != null)
-                    {
-                        string categoryName = category.Name;
-
-                        if (categoryCount.ContainsKey(categoryName))
-                        {
-                            categoryCount[categoryName]++;
-                        }
-                        else
-                        {
-                            categoryCount.Add(categoryName, 1);
-                        }
-                    }
+                    TaskDialog.Show("Ошибка", "Выбранные элементы не являются трубами.");
+                    return Result.Failed;
                 }
 
-                // Формируем отчет
-                string report = $"СТАТИСТИКА ВЫБРАННЫХ ЭЛЕМЕНТОВ\n\n";
-                report += $"Общее количество элементов: {totalCount}\n\n";
-                report += "Распределение по категориям:\n";
-                foreach (var category in categoryCount.OrderByDescending(x => x.Value))
+                // Определение нормалей - вычисление векторов нормалей для обеих труб
+                var normal1 = GetPipeNormal(pipe1);
+                var normal2 = GetPipeNormal(pipe2);
+
+                if (normal1 == null || normal2 == null)
                 {
-                    report += $"  {category.Key} → {category.Value} элементов\n";
+                    TaskDialog.Show("Ошибка", "Не удалось определить направление труб.");
+                    return Result.Failed;
+                }
+                // Проверка параллельности с использованием скалярного произведения
+                if (!ArePipesParallel(normal1, normal2))
+                {
+                    TaskDialog.Show("Ошибка", "Трубы не параллельны. Невозможно вычислить расстояние.");
+                    return Result.Failed;
                 }
 
-                // Дополнительная информация о типах элементов
-                report += $"\nТипы выбранных элементов:\n";
-                var elementTypes = selectedElements
-                    .Select(e => e.GetType().Name)
-                    .Distinct()
-                    .ToList();
+                // Расчет расстояния
+                var midpoint1 = GetPipeMidpoint(pipe1);
+                var midpoint2 = GetPipeMidpoint(pipe2);
 
-                foreach (string typeName in elementTypes)
-                {
-                    int typeCount = selectedElements.Count(e => e.GetType().Name == typeName);
-                    report += $"  {typeName}: {typeCount} элементов\n";
-                }
+                var distance = CalculateDistanceBetweenPipes(midpoint1, midpoint2, normal1);
 
-                // Выводим отчет в TaskDialog
-                TaskDialog.Show("Статистика выбора", report);
+                // Конвертация из футов в миллиметры (1 фут = 304.8 мм)
+                var distanceInMm = distance * 304.8;
+
+                // Вывод результата
+                string resultMessage = $"Расстояние между трубами: {distanceInMm:F2} мм\n\n" +
+                                      $"Труба 1 (ID: {pipe1.Id}): {GetPipeInfo(pipe1)}\n" +
+                                      $"Труба 2 (ID: {pipe2.Id}): {GetPipeInfo(pipe2)}";
+
+                TaskDialog.Show("Результат расчета", resultMessage);
 
                 return Result.Succeeded;
             }
+
+
             catch (Autodesk.Revit.Exceptions.OperationCanceledException)
             {
                 // Пользователь нажал Esc или отменил выбор
@@ -130,6 +96,92 @@ namespace Intro
                 return Result.Failed;
             }
         }
+
+        // Фильтр выбора только труб
+        public class PipeSelectionFilter : ISelectionFilter
+        {
+            public bool AllowElement(Element elem)
+            {
+                return elem is Pipe;
+            }
+            public bool AllowReference(Reference reference, XYZ position)
+            {
+                return false;
+            }
+        }
+
+        // Определение нормали трубы
+        private XYZ GetPipeNormal(Pipe pipe)
+        {
+            LocationCurve location = pipe.Location as LocationCurve;
+            if (location == null) return null;
+
+            Curve curve = location.Curve;
+            XYZ start = curve.GetEndPoint(0);
+            XYZ end = curve.GetEndPoint(1);
+
+            return (end - start).Normalize();
+        }
+
+        // Проверка параллельности труб с использованием скалярного произведения
+        private bool ArePipesParallel(XYZ normal1, XYZ normal2)
+        {
+            // Скалярное произведение для проверки параллельности: |n1·n2| ≈ 1
+            double dotProduct = Math.Abs(normal1.DotProduct(normal2));
+
+            // Допуск для учета погрешностей вычислений
+            double tolerance = 0.001; // 0.1% отклонение
+
+            return Math.Abs(dotProduct - 1.0) < tolerance;
+        }
+
+        // Нахождение середины трубы
+        private XYZ GetPipeMidpoint(Pipe pipe)
+        {
+            if (pipe.Location is LocationCurve locationCurve)
+            {
+                Curve curve = locationCurve.Curve;
+                if (curve != null)
+                {
+                    return curve.Evaluate(0.5, true); // Середина кривой
+                }
+            }
+            return null;
+        }
+
+        // Расчет расстояния между трубами
+        private double CalculateDistanceBetweenPipes(XYZ point1, XYZ point2, XYZ normal)
+        {
+            // Векторное вычитание для нахождения направления между трубами
+            XYZ vectorBetween = point2 - point1;  //вектор от середины первой трубы до середины второй трубы
+
+
+            double parallelLength = vectorBetween.DotProduct(normal); // длина компоненты вектора vectorBetween, которая параллельна направлению труб
+            XYZ parallelComponent = normal * parallelLength; //иммет направление как у труб, имеет длину parallelLength
+            XYZ perpendicularComponent = vectorBetween - parallelComponent; // perpendicularComponent = vectorBetween - (проекция vectorBetween на normal)
+
+            // Длина перпендикулярной составляющей - это расстояние между осями
+            double distance = perpendicularComponent.GetLength();
+            return distance;
+        }
+
+        // Получение информации о трубе для отчета
+        private string GetPipeInfo(Pipe pipe)
+        {
+            string info = $"Диаметр: {pipe.Diameter * 304.8:F1} мм";
+
+            if (pipe.Location is LocationCurve locationCurve)
+            {
+                Curve curve = locationCurve.Curve;
+                if (curve != null)
+                {
+                    double length = curve.Length * 304.8; // Конвертация в мм
+                    info += $", Длина: {length:F0} мм";
+                }
+            }
+            return info;
+        }
+
     }
 }
 
