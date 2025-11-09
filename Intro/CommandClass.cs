@@ -13,35 +13,9 @@ using static System.Net.Mime.MediaTypeNames;
 
 namespace Intro
 {
-
     [Transaction(TransactionMode.Manual)]
-    public class SelectionStatisticsCommand : IExternalCommand
+    public class SolidStatisticsCommand : IExternalCommand
     {
-
-        public class DuctSystemsSelectionFilter : ISelectionFilter
-        {
-            private readonly List<BuiltInCategory> allowedCategories = new List<BuiltInCategory>
-    {
-                BuiltInCategory.OST_DuctAccessory,         // Арматура воздуховодов
-        BuiltInCategory.OST_DuctTerminal,         // Воздухораспределители
-        BuiltInCategory.OST_MechanicalEquipment   // Оборудование
-    };
-
-            public bool AllowElement(Element elem)
-            {
-                // Проверяем, что элемент - FamilyInstance и принадлежит разрешенной категории
-                if (elem is FamilyInstance familyInstance)
-                {
-                    return allowedCategories.Contains((BuiltInCategory)familyInstance.Category.Id.IntegerValue);
-                }
-                return false;
-            }
-
-            public bool AllowReference(Reference reference, XYZ position)
-            {
-                return false;
-            }
-        }
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
             UIApplication uiApp = commandData.Application;
@@ -50,83 +24,89 @@ namespace Intro
 
             try
             {
-                // Запрашиваем выбор элементов у пользователя
-                IList<Reference> selectedReferences = uiDoc.Selection.PickObjects(
+                // Выбор любого элемента
+                Reference selectedReference = uiDoc.Selection.PickObject(
                     ObjectType.Element,
-                    new DuctSystemsSelectionFilter(),
-                    "Выберите элементы систем вентиляции");
+                    "Выберите любой элемент для анализа геометрии");
 
-                // Собираем элементы из ссылок
-                List<Element> selectedElements = new List<Element>();
-                foreach (Reference reference in selectedReferences)
+                Element element = doc.GetElement(selectedReference);
+
+                if (element == null)
                 {
-                    Element element = doc.GetElement(reference);
-                    if (element != null)
+                    TaskDialog.Show("Ошибка", "Не удалось получить элемент.");
+                    return Result.Failed;
+                }
+
+                // Сбор статистики
+                int solidCount = 0;  //количество солидов
+                double totalVolume = 0; //суммарный объем
+                double totalArea = 0; //суммарная площадь поверхностей
+                int faceCount = 0; //количество граней
+                int edgeCount = 0; //количество ребер
+                double totalEdgeLength = 0; //суммарная длина ребер
+
+                // Получаем геометрию
+                Options options = new Options();
+                options.DetailLevel = ViewDetailLevel.Fine;
+
+                GeometryElement geometry = element.get_Geometry(options);
+
+                if (geometry != null)
+                {
+                    foreach (GeometryObject geoObj in geometry)
                     {
-                        selectedElements.Add(element);
+                        if (geoObj is Solid solid && solid.Volume > 0)
+                        {
+                            solidCount++;
+                            totalVolume += solid.Volume;
+
+                            foreach (Face face in solid.Faces)
+                            {
+                                faceCount++;
+                                try { totalArea += face.Area; } catch { }
+
+                                foreach (EdgeArray edgeLoop in face.EdgeLoops)
+                                {
+                                    foreach (Edge edge in edgeLoop)
+                                    {
+                                        edgeCount++;
+                                        try
+                                        {
+                                            Curve curve = edge.AsCurve();
+                                            if (curve != null)
+                                                totalEdgeLength += curve.Length;
+                                        }
+                                        catch { }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 
-                // Создаем Dictionary для подсчета по категориям
-                Dictionary<string, int> categoryCount = new Dictionary<string, int>();
+                // Вывод результатов
+                string report = $"ГЕОМЕТРИЯ ЭЛЕМЕНТА:\n\n" +
+                               $"Категория: {element.Category?.Name}\n" +
+                               $"Тип: {element.GetType().Name}\n\n" +
+                               $"Solid-ы: {solidCount}\n" +
+                               $"Объем: {totalVolume * 1e9:F0} см³\n" +
+                               $"Площадь: {totalArea * 1e6:F0} см²\n" +
+                               $"Грани: {faceCount}\n" +
+                               $"Ребра: {edgeCount}\n" +
+                               $"Длина ребер: {totalEdgeLength * 1000:F0} мм";
 
-                // Подсчитываем общее количество и распределение по категориям
-                int totalCount = selectedElements.Count;
-
-                foreach (Element element in selectedElements)
-                {
-                    Category category = element.Category;
-                    if (category != null)
-                    {
-                        string categoryName = category.Name;
-
-                        if (categoryCount.ContainsKey(categoryName))
-                        {
-                            categoryCount[categoryName]++;
-                        }
-                        else
-                        {
-                            categoryCount.Add(categoryName, 1);
-                        }
-                    }
-                }
-
-                // Формируем отчет
-                string report = $"СТАТИСТИКА ВЫБРАННЫХ ЭЛЕМЕНТОВ\n\n";
-                report += $"Общее количество элементов: {totalCount}\n\n";
-                report += "Распределение по категориям:\n";
-                foreach (var category in categoryCount.OrderByDescending(x => x.Value))
-                {
-                    report += $"  {category.Key} → {category.Value} элементов\n";
-                }
-
-                // Дополнительная информация о типах элементов
-                report += $"\nТипы выбранных элементов:\n";
-                var elementTypes = selectedElements
-                    .Select(e => e.GetType().Name)
-                    .Distinct()
-                    .ToList();
-
-                foreach (string typeName in elementTypes)
-                {
-                    int typeCount = selectedElements.Count(e => e.GetType().Name == typeName);
-                    report += $"  {typeName}: {typeCount} элементов\n";
-                }
-
-                // Выводим отчет в TaskDialog
-                TaskDialog.Show("Статистика выбора", report);
+                TaskDialog.Show("Геометрия элемента", report);
 
                 return Result.Succeeded;
             }
             catch (Autodesk.Revit.Exceptions.OperationCanceledException)
             {
-                // Пользователь нажал Esc или отменил выбор
-                TaskDialog.Show("Статистика выбора", "Выбор отменен пользователем.");
+                TaskDialog.Show("Отмена", "Выбор отменен.");
                 return Result.Cancelled;
             }
             catch (Exception ex)
             {
-                message = $"Ошибка при выполнении команды: {ex.Message}";
+                message = $"Ошибка: {ex.Message}";
                 return Result.Failed;
             }
         }
