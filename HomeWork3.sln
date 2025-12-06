@@ -11,6 +11,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Task3_1", "Task3_1\Task3_1.
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Intro3", "Intro\Intro3.csproj", "{8893432D-7A11-4C8F-9FD9-2C9170F49396}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WallGeometry", "..\..\..\Desktop\WallGeometry\WallGeometry.csproj", "{90A78798-7766-44EE-A8FA-40144C2B7A9D}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -33,6 +35,10 @@ Global
 		{8893432D-7A11-4C8F-9FD9-2C9170F49396}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{8893432D-7A11-4C8F-9FD9-2C9170F49396}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{8893432D-7A11-4C8F-9FD9-2C9170F49396}.Release|Any CPU.Build.0 = Release|Any CPU
+		{90A78798-7766-44EE-A8FA-40144C2B7A9D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{90A78798-7766-44EE-A8FA-40144C2B7A9D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{90A78798-7766-44EE-A8FA-40144C2B7A9D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{90A78798-7766-44EE-A8FA-40144C2B7A9D}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
