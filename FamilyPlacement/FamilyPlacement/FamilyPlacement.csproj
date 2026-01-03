@@ -1,0 +1,18 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net6724</TargetFramework>
+	  <>UseWPF></UseWPF>PF></UseWPF>true<UseWPF></UseWPF>true
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Folder Include="Views\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
+    <PackageReference Include="CSharpFunctionalExtensions" Version="3.6.0" />
+    <PackageReference Include="RxBim.Command.Revit.2019" Version="3.0.5-dev001" />
+  </ItemGroup>
+
+</Project>
